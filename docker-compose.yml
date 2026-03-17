@@ -7,14 +7,13 @@
 #
 # The proxy binds on localhost:8080.  The ClickHouse HTTP interface is
 # available on localhost:8123 for local inspection (e.g. DBeaver, curl).
+#
+# Migrations are applied automatically on every `docker compose up` by the
+# `migrate` service.  Only new (not-yet-applied) files are executed.
 
 services:
   proxy:
-    build:
-      context: .
-      args:
-        VERSION: dev
-    image: codesteward-audit-proxy:dev
+    image: ghcr.io/bitkaio/codesteward-audit-proxy:latest
     restart: unless-stopped
     ports:
       - "127.0.0.1:8080:8080"
@@ -33,11 +32,29 @@ services:
       UPSTREAM_PROXY: "${UPSTREAM_PROXY:-}"
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
     depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  migrate:
+    # Alpine + curl: drives migrations over the HTTP interface (8123).
+    # Avoids clickhouse-client permission issues with the native protocol.
+    image: alpine:3.21
+    entrypoint: ["sh", "-c", "apk add -q --no-cache curl && sh /migrations/migrate.sh"]
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_HTTP_PORT: "8123"
+      CLICKHOUSE_DB: "audit"
+      CLICKHOUSE_USER: "default"
+      CLICKHOUSE_PASSWORD: ""
+    volumes:
+      - ./migrations:/migrations:ro
+    depends_on:
       clickhouse:
         condition: service_healthy
+    restart: "no"
 
   clickhouse:
-    image: clickhouse/clickhouse-server:24.8-alpine
+    image: clickhouse/clickhouse-server:latest
     restart: unless-stopped
     ports:
       # HTTP interface — useful for local inspection; not needed by the proxy
@@ -51,9 +68,6 @@ services:
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
     volumes:
       - clickhouse-data:/var/lib/clickhouse
-      # Run all migrations in order on first start.
-      # The audit database is created by CLICKHOUSE_DB before these run.
-      - ./migrations:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1'"]
       interval: 10s

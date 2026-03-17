@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-03-18
+
+### Added
+
+- `migrations/migrate.sh` — idempotent HTTP-based migration runner; uses `curl` against the ClickHouse HTTP interface (port 8123) so no `clickhouse-client` binary is required; tracks applied versions in `<db>.schema_migrations` using a `ReplacingMergeTree` table; splits multi-statement files on semicolons via `awk` and executes each statement individually
+- `migrate` service in `docker-compose.yml` — runs on every `docker compose up` using `alpine:3.21`; applies only pending migrations; the `proxy` service starts only after the migrate service completes successfully
+
+### Fixed
+
+- Compressed response body in `raw` field — the Claude Code VSCode extension (and TypeScript SDK) explicitly sets `Accept-Encoding: gzip, deflate, br`; when forwarded verbatim, Go's `http.Transport` treats compression as application-managed and does not decompress the response, causing the audit `raw` field to contain binary data and `thinking`/`assistant_text` to be empty; fixed by adding `Accept-Encoding` to the stripped headers list so `http.Transport` negotiates encoding itself and transparently decompresses before the `TeeReader` sees the body
+- Agent detection for VSCode extension — `detectAgent` used a case-sensitive `strings.Contains` check; the Claude Code VSCode extension sends `Claude-Code` (capitalised) which fell through to `"unknown"`; fixed by applying `strings.ToLower` before comparison
+- `003_request_capture.sql` — both `ALTER TABLE` statements used unqualified table name `audit_events`; the old `clickhouse-client --database=audit` flag set an implicit database context that the HTTP-based migration runner does not; fixed by using fully qualified `audit.audit_events`
+
 ## [0.2.0] - 2026-03-17
 
 ### Added

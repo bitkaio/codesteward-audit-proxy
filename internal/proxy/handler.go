@@ -140,11 +140,16 @@ type auditTransport struct {
 	captureRequests bool
 }
 
-// internalHeaders are headers used for internal routing/audit that must not be
-// forwarded to upstream APIs.
+// internalHeaders are headers that must not be forwarded to upstream APIs.
+// Accept-Encoding is included so that http.Transport adds its own encoding
+// negotiation header — this ensures it transparently decompresses the
+// response body before it reaches our TeeReader. Without this, the agent's
+// explicit "gzip, br" value causes Transport to leave the body compressed and
+// the audit copy ends up as binary garbage.
 var internalHeaders = []string{
 	"X-Session-ID",
 	"X-Audit-Agent",
+	"Accept-Encoding",
 }
 
 func (t *auditTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -272,8 +277,10 @@ func (t *auditTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 // detectAgent infers the calling agent from the User-Agent header.
+// Comparison is case-insensitive to handle capitalisation differences between
+// the CLI ("claude-code") and the VSCode extension ("Claude-Code").
 func detectAgent(headers http.Header) string {
-	ua := headers.Get("User-Agent")
+	ua := strings.ToLower(headers.Get("User-Agent"))
 	switch {
 	case strings.Contains(ua, "claude-code"):
 		return "claude-code"
