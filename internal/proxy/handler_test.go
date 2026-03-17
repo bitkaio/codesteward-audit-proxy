@@ -52,7 +52,7 @@ func newStack(t *testing.T, fakeHandler http.HandlerFunc) (*Handler, chan audit.
 		inner:       http.DefaultTransport,
 		upstreamURL: upstream.URL,
 	}
-	return NewHandler(adder, transport, "test-project", "test-branch", audit.NopScrubber{}, true), eventCh
+	return NewHandler(adder, transport, "test-project", "test-branch", audit.NopScrubber{}, true, NewRouter("", "ml.hana.ondemand.com")), eventCh
 }
 
 // collectEvents drains eventCh until no new events arrive within 100 ms or
@@ -263,7 +263,7 @@ func TestHandler_BadGatewayOnUnreachableUpstream(t *testing.T) {
 	handler := NewHandler(&chanAdder{ch: eventCh}, &forceUpstreamTransport{
 		inner:       http.DefaultTransport,
 		upstreamURL: dead.URL,
-	}, "", "", audit.NopScrubber{}, true)
+	}, "", "", audit.NopScrubber{}, true, NewRouter("", "ml.hana.ondemand.com"))
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 	rr := httptest.NewRecorder()
