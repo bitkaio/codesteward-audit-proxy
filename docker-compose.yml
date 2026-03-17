@@ -1,0 +1,65 @@
+# Local development stack: proxy + ClickHouse
+#
+# Quick start:
+#   cp .env.example .env          # fill in AUDIT_PROJECT, etc.
+#   docker compose up -d
+#   export ANTHROPIC_BASE_URL=http://localhost:8080
+#
+# The proxy binds on localhost:8080.  The ClickHouse HTTP interface is
+# available on localhost:8123 for local inspection (e.g. DBeaver, curl).
+
+services:
+  proxy:
+    build:
+      context: .
+      args:
+        VERSION: dev
+    image: codesteward-audit-proxy:dev
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      PROXY_ADDR: "0.0.0.0:8080"
+      CLICKHOUSE_DSN: "clickhouse://default:@clickhouse:9000/audit"
+      CLICKHOUSE_DB: "audit"
+      BATCH_SIZE: "100"
+      BATCH_INTERVAL: "1s"
+      LOG_LEVEL: "info"
+      # Override these in .env or environment:
+      AUDIT_PROJECT: "${AUDIT_PROJECT:-}"
+      AUDIT_BRANCH: "${AUDIT_BRANCH:-}"
+      AUDIT_CAPTURE_REQUESTS: "${AUDIT_CAPTURE_REQUESTS:-true}"
+      AUDIT_SCRUB_PATTERNS: "${AUDIT_SCRUB_PATTERNS:-}"
+      UPSTREAM_PROXY: "${UPSTREAM_PROXY:-}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    restart: unless-stopped
+    ports:
+      # HTTP interface — useful for local inspection; not needed by the proxy
+      - "127.0.0.1:8123:8123"
+      # Native protocol — used by the proxy
+      - "127.0.0.1:9000:9000"
+    environment:
+      CLICKHOUSE_DB: "audit"
+      CLICKHOUSE_USER: "default"
+      CLICKHOUSE_PASSWORD: ""
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      # Run all migrations in order on first start.
+      # The audit database is created by CLICKHOUSE_DB before these run.
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  clickhouse-data:
