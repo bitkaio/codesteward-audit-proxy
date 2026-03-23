@@ -7,10 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-03-23
+
 ### Added
 
-- `ANTHROPIC_UPSTREAM_URL`, `OPENAI_UPSTREAM_URL`, `GEMINI_UPSTREAM_URL` env vars — override the default upstream target for each provider without changing detection logic; useful for routing through LiteLLM, Portkey, a regional endpoint, or any internal gateway; defaults remain `https://api.anthropic.com`, `https://api.openai.com`, `https://generativelanguage.googleapis.com`
-- `NewRouterWithConfig(RouterConfig)` constructor on `Router` — accepts the three upstream URL overrides alongside the existing SAP AI Core config; `NewRouter` is preserved as a backwards-compatible wrapper
+- **IDE plugin header support** — `X-Audit-User`, `X-Audit-Team`, `X-Audit-Project`, `X-Audit-Branch`, `X-Audit-Session-ID`, and `X-Audit-Agent` headers allow IDE companion plugins to inject per-request identity and context; header values override env-var defaults (`AUDIT_PROJECT`, `AUDIT_BRANCH`) for centrally-hosted deployments
+- **Unprocessed events table** — responses the proxy cannot parse into structured audit records (non-chat endpoints like `/v1/models` and `/v1/count_tokens`, unknown providers, parse errors) are routed to `audit.unprocessed_events` instead of being silently dropped; stores raw body, HTTP method, path, status code, content type, and parse error message
+- **Health endpoint** — `GET /healthz` returns `{"status":"ok","version":"..."}` for IDE plugin connectivity checks and load balancer probes; version set at build time via `-ldflags "-X main.version=..."`
+- `user` and `team` columns on `audit_events` — `LowCardinality(String)`, populated from `X-Audit-User` and `X-Audit-Team` headers
+- `UnprocessedAdder` interface and `UnprocessedBatcher` — mirrors `EventAdder`/`Batcher` pattern for the unprocessed events write path
+- `ANTHROPIC_UPSTREAM_URL`, `OPENAI_UPSTREAM_URL`, `GEMINI_UPSTREAM_URL` env vars — override the default upstream target for each provider without changing detection logic; useful for routing through LiteLLM, Portkey, a regional endpoint, or any internal gateway
+- `NewRouterWithConfig(RouterConfig)` constructor on `Router` — accepts upstream URL overrides alongside SAP AI Core config; `NewRouter` preserved as backwards-compatible wrapper
+- Migration `005_add_user_team.sql` — adds `user` and `team` columns to existing installations
+- Migration `006_unprocessed_events.sql` — creates the `unprocessed_events` table
+- Cline agent detection — `detectAgent` now matches `cline` in the User-Agent header
+- Claude Code VSCode extension detection — `detectAgent` now matches `claude-cli` User-Agent sent by the VSCode extension (in addition to `claude-code` from the CLI)
+- Session ID priority chain: `X-Audit-Session-ID` > `X-Session-ID` > auto-generated UUID
+- IDE plugins design document (`docs/ide-plugins-design.md`) — comprehensive design for VSCode and JetBrains companion plugins covering env var injection, config file schema, and header protocol
+- New handler tests: `X-Audit-*` header overrides, session ID fallback, Cline detection, Claude VSCode extension detection, unprocessed event routing
+
+### Changed
+
+- `extractEvents` now returns `([]audit.AuditEvent, error)` instead of `[]audit.AuditEvent` — parse errors are surfaced to the caller for routing to the unprocessed table
+- `NewHandler` signature extended with `unprocessed audit.UnprocessedAdder` parameter
+- `requestMeta` struct extended with `user`, `team`, `method`, and `unprocessed` fields
 
 ## [0.3.0] - 2026-03-18
 
@@ -71,6 +91,8 @@ Initial release.
 - ClickHouse migrations: `001_initial.sql` (full schema), `002_add_branch.sql`
 - Test suite: parser unit tests, batcher tests, router tests, stream tap tests, handler integration tests
 
-[Unreleased]: https://github.com/bitkaio/codesteward-audit-proxy/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/bitkaio/codesteward-audit-proxy/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/bitkaio/codesteward-audit-proxy/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/bitkaio/codesteward-audit-proxy/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/bitkaio/codesteward-audit-proxy/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/bitkaio/codesteward-audit-proxy/releases/tag/v0.1.0

@@ -22,10 +22,13 @@ The proxy is fully transparent. It never buffers the response before forwarding,
 ## Features
 
 - **Stream tap, never buffer** — uses `io.TeeReader` to forward tokens to the agent immediately while capturing a copy for audit asynchronously
-- **Anthropic + OpenAI parsing** — extracts thinking blocks, text, and tool calls from both streaming (SSE) and non-streaming responses
+- **Anthropic + OpenAI + SAP AI Core parsing** — extracts thinking blocks, text, and tool calls from both streaming (SSE) and non-streaming responses
 - **Request capture with scrubbing** — records user-role messages in a structured `user_messages` column; configurable regexp scrubbing replaces sensitive content with `[REDACTED]` before storage
+- **IDE plugin header support** — `X-Audit-User`, `X-Audit-Team`, `X-Audit-Project`, `X-Audit-Branch`, and `X-Audit-Session-ID` headers allow IDE companion plugins to inject per-request identity and context
+- **Unprocessed event capture** — responses that cannot be parsed into structured audit records (non-chat endpoints, unknown providers, parse errors) are routed to a separate `unprocessed_events` table so no data is lost
+- **Health endpoint** — `GET /healthz` returns JSON status and version for IDE plugin connectivity checks and load balancer probes
 - **Batched ClickHouse writes** — accumulates events in memory and flushes on size threshold (default 100) or time interval (default 1s)
-- **Multi-tenancy** — `AUDIT_PROJECT` and `AUDIT_BRANCH` tag every row so multiple repos and branches share one ClickHouse instance
+- **Multi-tenancy** — `AUDIT_PROJECT` and `AUDIT_BRANCH` tag every row; `X-Audit-*` headers override env-var defaults for centrally-hosted deployments
 - **OpenTelemetry traces** — one span per proxied request with `gen_ai.system`, session/turn IDs, latency, and status; flush spans per ClickHouse batch; W3C trace context propagated in both directions
 - **Proxy chaining** — supports `UPSTREAM_PROXY` for corporate firewalls, Portkey, LiteLLM, and other gateway proxies
 - **Structured JSON logging** — every request, batch flush, and error logged via `log/slog`
@@ -166,6 +169,8 @@ All configuration is via environment variables. No config files required.
 | `ANTHROPIC_UPSTREAM_URL` | `https://api.anthropic.com` | Override Anthropic target (e.g. LiteLLM, Portkey, regional endpoint) |
 | `OPENAI_UPSTREAM_URL` | `https://api.openai.com` | Override OpenAI target |
 | `GEMINI_UPSTREAM_URL` | `https://generativelanguage.googleapis.com` | Override Gemini target |
+| `SAP_AICORE_BASE_URL` | *(none)* | SAP AI Core API URL; enables SAP AI Core routing when set |
+| `SAP_AICORE_AUTH_HOST` | `ml.hana.ondemand.com` | Host fragment for detecting SAP AI Core traffic |
 | `UPSTREAM_PROXY` | *(none)* | Upstream proxy URL (overrides `HTTPS_PROXY`) |
 | `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | *(none)* | Activates OTel traces when set (e.g. `http://localhost:4318`) |
@@ -223,9 +228,38 @@ The proxy extracts W3C `traceparent`/`tracestate` headers from incoming agent re
 
 ---
 
+## Health endpoint
+
+`GET /healthz` returns a JSON response with the proxy status and build version:
+
+```json
+{"status": "ok", "version": "0.4.0"}
+```
+
+Useful for IDE plugin connectivity checks, load balancer probes, and deployment verification. The version is set at build time via `-ldflags "-X main.version=..."`.
+
+---
+
+## IDE plugin headers
+
+When the proxy is hosted centrally (shared by a team), individual developers cannot set env vars on the proxy process. Instead, IDE companion plugins (VSCode, JetBrains) inject per-request identity via `X-Audit-*` headers.
+
+| Header | Description | Override behaviour |
+| --- | --- | --- |
+| `X-Audit-User` | Developer identity (git email, username) | Stored as-is |
+| `X-Audit-Team` | Team or org identifier | Stored as-is |
+| `X-Audit-Project` | Repository / project name | Overrides `AUDIT_PROJECT` env var |
+| `X-Audit-Branch` | Git branch | Overrides `AUDIT_BRANCH` env var |
+| `X-Audit-Session-ID` | Session identifier | Takes priority over `X-Session-ID` and auto-generated UUID |
+| `X-Audit-Agent` | Agent name override | Overrides User-Agent detection |
+
+All `X-Audit-*` headers are stripped before forwarding to upstream APIs — they never reach the LLM provider.
+
+---
+
 ## Multi-tenancy
 
-`AUDIT_PROJECT` and `AUDIT_BRANCH` tag every ClickHouse row, allowing multiple repositories and branches to share one instance.
+`AUDIT_PROJECT` and `AUDIT_BRANCH` tag every ClickHouse row, allowing multiple repositories and branches to share one instance. For centrally-hosted proxies, `X-Audit-Project` and `X-Audit-Branch` headers override the env-var defaults on a per-request basis.
 
 ```bash
 export AUDIT_PROJECT=myorg/myrepo
@@ -237,10 +271,10 @@ go run ./cmd/proxy
 Example query across tenants:
 
 ```sql
-SELECT project, branch, agent, tool_name, count() AS calls
+SELECT project, branch, user, agent, tool_name, count() AS calls
 FROM audit.audit_events
 WHERE toDate(ts) = today()
-GROUP BY project, branch, agent, tool_name
+GROUP BY project, branch, user, agent, tool_name
 ORDER BY calls DESC;
 ```
 
@@ -255,6 +289,7 @@ The proxy detects the upstream from the `Host` header first, then the request pa
 | `api.anthropic.com` or `/v1/messages` | `https://api.anthropic.com` |
 | `api.openai.com` or `/v1/chat/` | `https://api.openai.com` |
 | `generativelanguage.googleapis.com` or `/v1beta/` | `https://generativelanguage.googleapis.com` |
+| SAP AI Core host (configurable) | SAP AI Core base URL |
 
 ---
 
@@ -278,6 +313,8 @@ go run ./cmd/proxy
 
 ## ClickHouse schema
 
+### audit_events
+
 One row per tool call. Responses with no tool calls produce a single row with `tool_name = ''`. Request-direction rows carry `user_messages` and have `direction = 'request'`.
 
 ```sql
@@ -293,22 +330,58 @@ CREATE TABLE audit.audit_events
     thinking          Array(String),
     assistant_text    Array(String),
     tool_name         String,
-    tool_input        String,           -- JSON-encoded tool input
+    tool_input        String,              -- JSON-encoded tool input
     model             LowCardinality(String),
-    raw               String,           -- full original body (scrubbed if patterns set)
-    request_captured  UInt8,            -- 0 when AUDIT_CAPTURE_REQUESTS=false
-    user_messages     Array(String)     -- extracted user-role text, scrubbed
+    raw               String,              -- full original body (scrubbed if patterns set)
+    resource_group    String,              -- SAP AI Core resource group
+    request_captured  UInt8,               -- 0 when AUDIT_CAPTURE_REQUESTS=false
+    user_messages     Array(String),       -- extracted user-role text, scrubbed
+    user              LowCardinality(String),  -- developer identity from X-Audit-User
+    team              LowCardinality(String)   -- team/org from X-Audit-Team
 )
 ENGINE = MergeTree()
 PARTITION BY toYYYYMM(ts)
 ORDER BY (project, session_id, ts);
 ```
 
-Existing installations: apply migrations in order:
+### unprocessed_events
+
+Responses (and requests) that cannot be parsed into structured audit records are stored here. This includes non-chat endpoints (e.g. `/v1/models`, `/v1/count_tokens`), unknown providers, and parse errors.
+
+```sql
+CREATE TABLE audit.unprocessed_events
+(
+    session_id    String,
+    turn_id       String,
+    ts            DateTime64(3),
+    agent         LowCardinality(String),
+    project       String,
+    branch        LowCardinality(String),
+    user          LowCardinality(String),
+    team          LowCardinality(String),
+    direction     LowCardinality(String),
+    method        LowCardinality(String),
+    path          String,
+    status_code   UInt16,
+    content_type  LowCardinality(String),
+    raw           String,
+    error         String
+)
+ENGINE = MergeTree()
+PARTITION BY toYYYYMM(ts)
+ORDER BY (project, session_id, ts);
+```
+
+### Migrations
+
+Existing installations: apply migrations in order. If using Docker Compose, migrations are applied automatically.
 
 ```bash
 clickhouse-client --multiquery < migrations/002_add_branch.sql
 clickhouse-client --multiquery < migrations/003_request_capture.sql
+clickhouse-client --multiquery < migrations/004_sapaicore.sql
+clickhouse-client --multiquery < migrations/005_add_user_team.sql
+clickhouse-client --multiquery < migrations/006_unprocessed_events.sql
 ```
 
 ---
@@ -316,29 +389,37 @@ clickhouse-client --multiquery < migrations/003_request_capture.sql
 ## Repository structure
 
 ```text
-├── cmd/proxy/main.go                 Entry point, wiring, graceful shutdown
+├── cmd/proxy/main.go                 Entry point, /healthz, wiring, graceful shutdown
 ├── internal/
 │   ├── config/config.go              Env-var config loading, git branch detection
 │   ├── telemetry/otel.go             OTel TracerProvider setup (no-op when unconfigured)
 │   ├── audit/
-│   │   ├── event.go                  AuditEvent struct + EventAdder interface
-│   │   ├── batcher.go                In-memory batcher (size + interval flush)
+│   │   ├── event.go                  AuditEvent, UnprocessedEvent, EventAdder, UnprocessedAdder
+│   │   ├── batcher.go                In-memory batchers (size + interval flush)
 │   │   ├── scrubber.go               Scrubber interface, NopScrubber, PatternScrubber
-│   │   └── clickhouse.go             ClickHouse native-protocol writer
+│   │   └── clickhouse.go             ClickHouse native-protocol writer (audit + unprocessed)
 │   ├── proxy/
 │   │   ├── handler.go                Reverse proxy handler, audit transport, OTel spans
 │   │   ├── router.go                 Upstream detection and URL rewriting
 │   │   ├── stream.go                 TeeReader stream tap
 │   │   └── transport.go              http.Transport with proxy chaining
 │   └── parser/
+│       ├── types.go                  Shared ToolCall type
 │       ├── anthropic.go              Anthropic message + SSE stream parser
 │       ├── openai.go                 OpenAI chat completion + SSE stream parser
+│       ├── sapaicore.go              SAP AI Core response parser
 │       ├── request.go                Provider-agnostic request parser (user message extraction)
 │       └── gemini.go                 Gemini stub (TODO)
+├── docs/
+│   └── ide-plugins-design.md         VSCode + JetBrains companion plugin design
 └── migrations/
     ├── 001_initial.sql               Full schema for new installations
-    ├── 002_add_branch.sql            Add branch column to existing installations
-    └── 003_request_capture.sql       Add request_captured + user_messages columns
+    ├── 002_add_branch.sql            Add branch column
+    ├── 003_request_capture.sql       Add request_captured + user_messages columns
+    ├── 004_sapaicore.sql             Add resource_group column
+    ├── 005_add_user_team.sql         Add user + team columns
+    ├── 006_unprocessed_events.sql    Create unprocessed_events table
+    └── migrate.sh                    Idempotent HTTP migration runner
 ```
 
 ---
@@ -349,7 +430,7 @@ clickhouse-client --multiquery < migrations/003_request_capture.sql
 go test ./...
 ```
 
-Tests cover: Anthropic and OpenAI parsing (full and streaming, including edge cases), batcher (size-threshold flush, ticker flush, drain on stop, non-blocking drop), scrubber (pattern redaction, multi-pattern, passthrough, invalid pattern error), request parser (string and array content, mixed conversations, scrubber application), router (host-based, path-based, header-based routing, URL rewriting), stream tap (byte fidelity, SSE detection, callback timing), and the handler end-to-end (status/body/header passthrough, internal header scrubbing, audit event emission, 502 on dead upstream).
+Tests cover: Anthropic and OpenAI parsing (full and streaming, including edge cases), batcher (size-threshold flush, ticker flush, drain on stop, non-blocking drop), scrubber (pattern redaction, multi-pattern, passthrough, invalid pattern error), request parser (string and array content, mixed conversations, scrubber application), router (host-based, path-based, header-based routing, URL rewriting), stream tap (byte fidelity, SSE detection, callback timing), and the handler end-to-end (status/body/header passthrough, internal header scrubbing, audit event emission, X-Audit-* header overrides, unprocessed event routing, agent detection for all supported agents, 502 on dead upstream).
 
 ---
 
