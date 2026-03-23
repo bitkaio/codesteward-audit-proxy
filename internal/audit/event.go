@@ -27,6 +27,13 @@ type AuditEvent struct {
 	Model         string
 	Raw           string // full original response body
 
+	// User is the developer identity injected by the IDE plugin via
+	// the X-Audit-User header. Empty when no plugin is configured.
+	User string
+
+	// Team is the team/org identifier injected via X-Audit-Team header.
+	Team string
+
 	// ResourceGroup is the SAP AI Core AI-Resource-Group header value.
 	// Empty for all non-SAP providers.
 	ResourceGroup string

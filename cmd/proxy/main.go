@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -16,6 +17,9 @@ import (
 	"llm-audit-proxy/internal/proxy"
 	"llm-audit-proxy/internal/telemetry"
 )
+
+// version is set at build time via -ldflags "-X main.version=...".
+var version = "dev"
 
 func main() {
 	cfg, err := config.Load()
@@ -83,9 +87,21 @@ func main() {
 	})
 	handler := proxy.NewHandler(batcher, transport, cfg.AuditProject, cfg.AuditBranch, scrubber, cfg.CaptureRequests, router)
 
+	// Top-level mux: /healthz is handled directly; everything else goes to
+	// the reverse proxy handler.
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"status":  "ok",
+			"version": version,
+		})
+	})
+	mux.Handle("/", handler)
+
 	srv := &http.Server{
 		Addr:         cfg.ProxyAddr,
-		Handler:      handler,
+		Handler:      mux,
 		ReadTimeout:  5 * time.Minute,
 		WriteTimeout: 5 * time.Minute,
 		IdleTimeout:  2 * time.Minute,

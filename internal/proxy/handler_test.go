@@ -255,6 +255,92 @@ func TestHandler_SessionIDPropagated(t *testing.T) {
 	}
 }
 
+func TestHandler_XAuditHeadersOverrideDefaults(t *testing.T) {
+	handler, eventCh := newStack(t, func(w http.ResponseWriter, r *http.Request) {
+		// Verify X-Audit-* headers are stripped before reaching upstream.
+		for _, h := range []string{"X-Audit-User", "X-Audit-Project", "X-Audit-Branch", "X-Audit-Session-ID", "X-Audit-Team"} {
+			if v := r.Header.Get(h); v != "" {
+				t.Errorf("%s leaked to upstream: %q", h, v)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"model":"m","content":[]}`))
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader("{}"))
+	req.Header.Set("X-Audit-User", "alice@corp.com")
+	req.Header.Set("X-Audit-Project", "override-project")
+	req.Header.Set("X-Audit-Branch", "override-branch")
+	req.Header.Set("X-Audit-Session-ID", "plugin-session-123")
+	req.Header.Set("X-Audit-Team", "platform-eng")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	events := collectEvents(eventCh)
+	if len(events) == 0 {
+		t.Fatal("no events")
+	}
+
+	// Check that header values override env-var defaults.
+	e := events[0]
+	if e.SessionID != "plugin-session-123" {
+		t.Errorf("session_id: got %q, want %q", e.SessionID, "plugin-session-123")
+	}
+	if e.Project != "override-project" {
+		t.Errorf("project: got %q, want %q", e.Project, "override-project")
+	}
+	if e.Branch != "override-branch" {
+		t.Errorf("branch: got %q, want %q", e.Branch, "override-branch")
+	}
+	if e.User != "alice@corp.com" {
+		t.Errorf("user: got %q, want %q", e.User, "alice@corp.com")
+	}
+	if e.Team != "platform-eng" {
+		t.Errorf("team: got %q, want %q", e.Team, "platform-eng")
+	}
+}
+
+func TestHandler_XAuditSessionIDFallsBackToXSessionID(t *testing.T) {
+	handler, eventCh := newStack(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"model":"m","content":[]}`))
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	req.Header.Set("X-Session-ID", "legacy-session")
+	// No X-Audit-Session-ID set — should fall back to X-Session-ID.
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	events := collectEvents(eventCh)
+	if len(events) == 0 {
+		t.Fatal("no events")
+	}
+	if events[0].SessionID != "legacy-session" {
+		t.Errorf("session_id: got %q, want %q", events[0].SessionID, "legacy-session")
+	}
+}
+
+func TestHandler_DetectAgentCline(t *testing.T) {
+	handler, eventCh := newStack(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"model":"m","content":[]}`))
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader("{}"))
+	req.Header.Set("User-Agent", "Cline/3.51.0")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	events := collectEvents(eventCh)
+	if len(events) == 0 {
+		t.Fatal("no events")
+	}
+	if events[0].Agent != "cline" {
+		t.Errorf("agent: got %q, want %q", events[0].Agent, "cline")
+	}
+}
+
 func TestHandler_BadGatewayOnUnreachableUpstream(t *testing.T) {
 	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	dead.Close() // immediately close so the port is unreachable

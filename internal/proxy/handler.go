@@ -34,6 +34,8 @@ type requestMeta struct {
 	upstreamName  string
 	project       string
 	branch        string
+	user          string
+	team          string
 	startTime     time.Time
 	batcher       audit.EventAdder
 	reqPath       string
@@ -92,7 +94,12 @@ func (h *Handler) director(req *http.Request) {
 	upstream := h.router.DetectUpstream(req)
 	RewriteRequest(req, upstream)
 
-	sessionID := req.Header.Get("X-Session-ID")
+	// Session ID: X-Audit-Session-ID takes precedence, then X-Session-ID,
+	// then auto-generated UUID.
+	sessionID := req.Header.Get("X-Audit-Session-ID")
+	if sessionID == "" {
+		sessionID = req.Header.Get("X-Session-ID")
+	}
 	if sessionID == "" {
 		sessionID = uuid.New().String()
 	}
@@ -103,13 +110,27 @@ func (h *Handler) director(req *http.Request) {
 		agent = override
 	}
 
+	// Header-based overrides take precedence over env-var defaults.
+	// This enables centrally-hosted proxies where per-request identity
+	// is injected by the IDE plugin.
+	project := h.project
+	if v := req.Header.Get("X-Audit-Project"); v != "" {
+		project = v
+	}
+	branch := h.branch
+	if v := req.Header.Get("X-Audit-Branch"); v != "" {
+		branch = v
+	}
+
 	meta := &requestMeta{
 		sessionID:     sessionID,
 		turnID:        turnID,
 		agent:         agent,
 		upstreamName:  upstream.Name,
-		project:       h.project,
-		branch:        h.branch,
+		project:       project,
+		branch:        branch,
+		user:          req.Header.Get("X-Audit-User"),
+		team:          req.Header.Get("X-Audit-Team"),
 		startTime:     time.Now(),
 		batcher:       h.batcher,
 		reqPath:       req.URL.Path,
@@ -149,6 +170,11 @@ type auditTransport struct {
 var internalHeaders = []string{
 	"X-Session-ID",
 	"X-Audit-Agent",
+	"X-Audit-User",
+	"X-Audit-Project",
+	"X-Audit-Branch",
+	"X-Audit-Session-ID",
+	"X-Audit-Team",
 	"Accept-Encoding",
 }
 
@@ -219,6 +245,8 @@ func (t *auditTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 				Agent:           meta.agent,
 				Project:         meta.project,
 				Branch:          meta.branch,
+				User:            meta.user,
+				Team:            meta.team,
 				Direction:       "request",
 				Raw:             result.Raw,
 				UserMessages:    result.UserMessages,
@@ -266,8 +294,8 @@ func (t *auditTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		)
 
 		events := extractEvents(body, isStream, meta.upstreamName,
-			meta.sessionID, meta.turnID, meta.agent, meta.project, meta.branch, ts,
-			meta.reqPath, meta.resourceGroup)
+			meta.sessionID, meta.turnID, meta.agent, meta.project, meta.branch,
+			meta.user, meta.team, ts, meta.reqPath, meta.resourceGroup)
 		for _, e := range events {
 			meta.batcher.Add(e)
 		}
@@ -288,6 +316,8 @@ func detectAgent(headers http.Header) string {
 		return "codex"
 	case strings.Contains(ua, "gemini-cli"):
 		return "gemini-cli"
+	case strings.Contains(ua, "cline"):
+		return "cline"
 	default:
 		return "unknown"
 	}
@@ -300,6 +330,7 @@ func extractEvents(
 	body []byte,
 	isStream bool,
 	upstreamName, sessionID, turnID, agent, project, branch string,
+	user, team string,
 	ts time.Time,
 	reqPath, resourceGroup string,
 ) []audit.AuditEvent {
@@ -310,6 +341,8 @@ func extractEvents(
 		Agent:           agent,
 		Project:         project,
 		Branch:          branch,
+		User:            user,
+		Team:            team,
 		Direction:       "response",
 		Raw:             string(body),
 		RequestCaptured: true,
