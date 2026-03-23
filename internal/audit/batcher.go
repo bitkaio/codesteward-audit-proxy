@@ -119,6 +119,99 @@ func (b *Batcher) run() {
 	}
 }
 
+// UnprocessedBatcher accumulates UnprocessedEvents and flushes them to
+// ClickHouse. Same design as Batcher: non-blocking Add, background goroutine.
+type UnprocessedBatcher struct {
+	writer   *Writer
+	size     int
+	interval time.Duration
+	ch       chan UnprocessedEvent
+	done     chan struct{}
+}
+
+// NewUnprocessedBatcher creates and starts an UnprocessedBatcher.
+func NewUnprocessedBatcher(writer *Writer, size int, interval time.Duration) *UnprocessedBatcher {
+	b := &UnprocessedBatcher{
+		writer:   writer,
+		size:     size,
+		interval: interval,
+		ch:       make(chan UnprocessedEvent, size*10),
+		done:     make(chan struct{}),
+	}
+	go b.run()
+	return b
+}
+
+func (b *UnprocessedBatcher) Add(e UnprocessedEvent) {
+	select {
+	case b.ch <- e:
+	default:
+		slog.Warn("unprocessed batcher channel full, dropping event",
+			"session_id", e.SessionID,
+			"turn_id", e.TurnID,
+		)
+	}
+}
+
+func (b *UnprocessedBatcher) Stop() {
+	close(b.done)
+}
+
+func (b *UnprocessedBatcher) run() {
+	ticker := time.NewTicker(b.interval)
+	defer ticker.Stop()
+
+	batch := make([]UnprocessedEvent, 0, b.size)
+
+	for {
+		select {
+		case e := <-b.ch:
+			batch = append(batch, e)
+			if len(batch) >= b.size {
+				b.flush(batch)
+				batch = batch[:0]
+				ticker.Reset(b.interval)
+			}
+		case <-ticker.C:
+			if len(batch) > 0 {
+				b.flush(batch)
+				batch = batch[:0]
+			}
+		case <-b.done:
+			for {
+				select {
+				case e := <-b.ch:
+					batch = append(batch, e)
+				default:
+					if len(batch) > 0 {
+						b.flush(batch)
+					}
+					return
+				}
+			}
+		}
+	}
+}
+
+func (b *UnprocessedBatcher) flush(batch []UnprocessedEvent) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	if err := b.writer.WriteUnprocessedBatch(ctx, batch); err != nil {
+		slog.Error("clickhouse unprocessed batch write failed, discarding batch",
+			"err", err,
+			"count", len(batch),
+		)
+		return
+	}
+
+	slog.Debug("clickhouse unprocessed batch flushed",
+		"count", len(batch),
+		"duration_ms", time.Since(start).Milliseconds(),
+	)
+}
+
 func (b *Batcher) flush(batch []AuditEvent) {
 	if b.flushFn != nil {
 		b.flushFn(batch)

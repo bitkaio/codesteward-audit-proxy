@@ -89,6 +89,47 @@ func (w *Writer) WriteBatch(ctx context.Context, events []AuditEvent) error {
 	return nil
 }
 
+// WriteUnprocessedBatch inserts a slice of UnprocessedEvents in a single batch.
+func (w *Writer) WriteUnprocessedBatch(ctx context.Context, events []UnprocessedEvent) error {
+	if len(events) == 0 {
+		return nil
+	}
+
+	batch, err := w.conn.PrepareBatch(ctx,
+		fmt.Sprintf("INSERT INTO %s.unprocessed_events (session_id, turn_id, ts, agent, project, branch, user, team, direction, method, path, status_code, content_type, raw, error)", w.db))
+	if err != nil {
+		return fmt.Errorf("clickhouse: prepare unprocessed batch: %w", err)
+	}
+
+	for _, e := range events {
+		if err := batch.Append(
+			e.SessionID,
+			e.TurnID,
+			e.TS,
+			e.Agent,
+			e.Project,
+			e.Branch,
+			e.User,
+			e.Team,
+			e.Direction,
+			e.Method,
+			e.Path,
+			uint16(e.StatusCode),
+			e.ContentType,
+			e.Raw,
+			e.Error,
+		); err != nil {
+			return fmt.Errorf("clickhouse: append unprocessed row: %w", err)
+		}
+	}
+
+	if err := batch.Send(); err != nil {
+		return fmt.Errorf("clickhouse: send unprocessed batch: %w", err)
+	}
+
+	return nil
+}
+
 // Close closes the underlying ClickHouse connection.
 func (w *Writer) Close() error {
 	return w.conn.Close()

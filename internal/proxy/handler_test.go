@@ -24,6 +24,24 @@ func (a *chanAdder) Add(e audit.AuditEvent) {
 	}
 }
 
+// nopUnprocessedAdder discards unprocessed events (used in tests that don't
+// care about the unprocessed path).
+type nopUnprocessedAdder struct{}
+
+func (nopUnprocessedAdder) Add(audit.UnprocessedEvent) {}
+
+// chanUnprocessedAdder captures unprocessed events for test assertions.
+type chanUnprocessedAdder struct {
+	ch chan audit.UnprocessedEvent
+}
+
+func (a *chanUnprocessedAdder) Add(e audit.UnprocessedEvent) {
+	select {
+	case a.ch <- e:
+	default:
+	}
+}
+
 // forceUpstreamTransport rewrites every outbound request to the given test
 // server URL so we can use a real Handler without real upstream DNS.
 type forceUpstreamTransport struct {
@@ -52,7 +70,7 @@ func newStack(t *testing.T, fakeHandler http.HandlerFunc) (*Handler, chan audit.
 		inner:       http.DefaultTransport,
 		upstreamURL: upstream.URL,
 	}
-	return NewHandler(adder, transport, "test-project", "test-branch", audit.NopScrubber{}, true, NewRouter("", "ml.hana.ondemand.com")), eventCh
+	return NewHandler(adder, transport, "test-project", "test-branch", audit.NopScrubber{}, true, NewRouter("", "ml.hana.ondemand.com"), nopUnprocessedAdder{}), eventCh
 }
 
 // collectEvents drains eventCh until no new events arrive within 100 ms or
@@ -321,6 +339,26 @@ func TestHandler_XAuditSessionIDFallsBackToXSessionID(t *testing.T) {
 	}
 }
 
+func TestHandler_DetectAgentClaudeVSCode(t *testing.T) {
+	handler, eventCh := newStack(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"model":"m","content":[]}`))
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader("{}"))
+	req.Header.Set("User-Agent", "claude-cli/2.1.81 (external, claude-vscode)")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	events := collectEvents(eventCh)
+	if len(events) == 0 {
+		t.Fatal("no events")
+	}
+	if events[0].Agent != "claude-code" {
+		t.Errorf("agent: got %q, want %q", events[0].Agent, "claude-code")
+	}
+}
+
 func TestHandler_DetectAgentCline(t *testing.T) {
 	handler, eventCh := newStack(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -341,6 +379,54 @@ func TestHandler_DetectAgentCline(t *testing.T) {
 	}
 }
 
+func TestHandler_EmptyResponseGoesToUnprocessed(t *testing.T) {
+	// Simulate a non-chat endpoint that returns an empty JSON response.
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(upstream.Close)
+
+	eventCh := make(chan audit.AuditEvent, 64)
+	unprocessedCh := make(chan audit.UnprocessedEvent, 64)
+	handler := NewHandler(
+		&chanAdder{ch: eventCh},
+		&forceUpstreamTransport{inner: http.DefaultTransport, upstreamURL: upstream.URL},
+		"test-project", "test-branch", audit.NopScrubber{}, true,
+		NewRouter("", "ml.hana.ondemand.com"),
+		&chanUnprocessedAdder{ch: unprocessedCh},
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("User-Agent", "claude-cli/2.1.81 (external, claude-vscode)")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	// The response should NOT produce a structured audit event.
+	all := collectEvents(eventCh)
+	respEvents := filterByDirection(all, "response")
+	if len(respEvents) > 0 {
+		t.Errorf("expected no response audit events, got %d", len(respEvents))
+	}
+
+	// It should appear in the unprocessed channel instead.
+	deadline := time.After(2 * time.Second)
+	select {
+	case ue := <-unprocessedCh:
+		if ue.Direction != "response" {
+			t.Errorf("unprocessed direction: got %q, want %q", ue.Direction, "response")
+		}
+		if ue.Path != "/v1/models" {
+			t.Errorf("unprocessed path: got %q, want %q", ue.Path, "/v1/models")
+		}
+		if ue.Method != "GET" {
+			t.Errorf("unprocessed method: got %q, want %q", ue.Method, "GET")
+		}
+	case <-deadline:
+		t.Fatal("expected an unprocessed event, got none")
+	}
+}
+
 func TestHandler_BadGatewayOnUnreachableUpstream(t *testing.T) {
 	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	dead.Close() // immediately close so the port is unreachable
@@ -349,7 +435,7 @@ func TestHandler_BadGatewayOnUnreachableUpstream(t *testing.T) {
 	handler := NewHandler(&chanAdder{ch: eventCh}, &forceUpstreamTransport{
 		inner:       http.DefaultTransport,
 		upstreamURL: dead.URL,
-	}, "", "", audit.NopScrubber{}, true, NewRouter("", "ml.hana.ondemand.com"))
+	}, "", "", audit.NopScrubber{}, true, NewRouter("", "ml.hana.ondemand.com"), nopUnprocessedAdder{})
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 	rr := httptest.NewRecorder()

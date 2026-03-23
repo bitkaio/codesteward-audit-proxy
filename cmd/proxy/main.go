@@ -71,8 +71,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Batcher and transport.
+	// Batchers and transport.
 	batcher := audit.NewBatcher(writer, cfg.BatchSize, cfg.BatchInterval)
+	unprocessedBatcher := audit.NewUnprocessedBatcher(writer, cfg.BatchSize, cfg.BatchInterval)
 	transport := proxy.BuildTransport(cfg)
 
 	if cfg.SAPAICoreBaseURL == "" {
@@ -85,7 +86,7 @@ func main() {
 		SAPAICoreBaseURL:     cfg.SAPAICoreBaseURL,
 		SAPAICoreAuthHost:    cfg.SAPAICoreAuthHost,
 	})
-	handler := proxy.NewHandler(batcher, transport, cfg.AuditProject, cfg.AuditBranch, scrubber, cfg.CaptureRequests, router)
+	handler := proxy.NewHandler(batcher, transport, cfg.AuditProject, cfg.AuditBranch, scrubber, cfg.CaptureRequests, router, unprocessedBatcher)
 
 	// Top-level mux: /healthz is handled directly; everything else goes to
 	// the reverse proxy handler.
@@ -130,6 +131,7 @@ func main() {
 	}
 
 	batcher.Stop()
+	unprocessedBatcher.Stop()
 
 	if err := otelShutdown(shutdownCtx); err != nil {
 		slog.Error("otel shutdown error", "err", err)
