@@ -7,7 +7,7 @@ A zero-config reverse proxy that intercepts LLM API traffic from AI coding agent
 ![Go version](https://img.shields.io/badge/go-1.25+-00ADD8?style=flat&logo=go)
 ![ClickHouse](https://img.shields.io/badge/ClickHouse-native-FFCC01?style=flat&logo=clickhouse)
 ![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-OTLP-6750D4?style=flat&logo=opentelemetry)
-![License](https://img.shields.io/badge/license-MIT-blue?style=flat)
+![License](https://img.shields.io/badge/license-BSD--3--Clause-blue?style=flat)
 
 ---
 
