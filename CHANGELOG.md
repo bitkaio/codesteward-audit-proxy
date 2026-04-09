@@ -7,16 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.0.1] - 2026-04-01
+## [1.0.1] - 2026-04-09
 
 ### Security
 
 - Upgraded `google.golang.org/grpc` from v1.79.2 to v1.79.3 — fixes an authorization bypass via missing leading slash in the HTTP/2 `:path` pseudo-header (CVSS 9.1, Critical)
 - Upgraded `github.com/ClickHouse/clickhouse-go/v2` from v2.26.0 to v2.44.0 and `github.com/ClickHouse/ch-go` from v0.61.5 to v0.71.0 — fixes a query smuggling vulnerability where large uncompressed malicious external data could be used to inject a query packet into the connection stream (CVE-2025-1386, CVSS 5.9, Moderate)
 
+### Changed
+
+- License changed from BSD-3-Clause to Apache-2.0 (copyright holder remains bitkaio LLC)
+- Repository moved from `bitkaio` to `codesteward` GitHub organization; all links updated
+- Docker Compose image reference updated to `ghcr.io/codesteward/codesteward-audit-proxy`
+
 ### Fixed
 
-- License badge in README now correctly shows BSD-3-Clause (was incorrectly showing MIT)
+- License badge in README now correctly shows Apache-2.0
 
 ## [1.0.0] - 2026-03-24
 
@@ -120,10 +126,10 @@ Initial release.
 - ClickHouse migrations: `001_initial.sql` (full schema), `002_add_branch.sql`
 - Test suite: parser unit tests, batcher tests, router tests, stream tap tests, handler integration tests
 
-[Unreleased]: https://github.com/bitkaio/codesteward-audit-proxy/compare/v1.0.1...HEAD
-[1.0.1]: https://github.com/bitkaio/codesteward-audit-proxy/compare/v1.0.0...v1.0.1
-[1.0.0]: https://github.com/bitkaio/codesteward-audit-proxy/compare/v0.4.0...v1.0.0
-[0.4.0]: https://github.com/bitkaio/codesteward-audit-proxy/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/bitkaio/codesteward-audit-proxy/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/bitkaio/codesteward-audit-proxy/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/bitkaio/codesteward-audit-proxy/releases/tag/v0.1.0
+[Unreleased]: https://github.com/codesteward/codesteward-audit-proxy/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/codesteward/codesteward-audit-proxy/compare/v1.0.0...v1.0.1
+[1.0.0]: https://github.com/codesteward/codesteward-audit-proxy/compare/v0.4.0...v1.0.0
+[0.4.0]: https://github.com/codesteward/codesteward-audit-proxy/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/codesteward/codesteward-audit-proxy/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/codesteward/codesteward-audit-proxy/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/codesteward/codesteward-audit-proxy/releases/tag/v0.1.0

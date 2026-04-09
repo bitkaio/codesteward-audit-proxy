@@ -7,7 +7,7 @@ A zero-config reverse proxy that intercepts LLM API traffic from AI coding agent
 ![Go version](https://img.shields.io/badge/go-1.25+-00ADD8?style=flat&logo=go)
 ![ClickHouse](https://img.shields.io/badge/ClickHouse-native-FFCC01?style=flat&logo=clickhouse)
 ![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-OTLP-6750D4?style=flat&logo=opentelemetry)
-![License](https://img.shields.io/badge/license-BSD--3--Clause-blue?style=flat)
+![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat)
 
 ---
 
@@ -41,10 +41,10 @@ The proxy is fully transparent. It never buffers the response before forwarding,
 
 Companion plugins for VSCode and JetBrains IDEs automatically configure the proxy, inject per-request identity (`X-Audit-*` headers), and show proxy connectivity status — no manual setup required.
 
-[![VS Code](https://img.shields.io/badge/VS_Code-extension-007ACC?style=for-the-badge&logo=visualstudiocode&logoColor=white)](https://github.com/bitkaio/codesteward-audit-proxy-plugins)
-[![JetBrains](https://img.shields.io/badge/JetBrains-plugin-FF6B00?style=for-the-badge&logo=jetbrains&logoColor=white)](https://github.com/bitkaio/codesteward-audit-proxy-plugins)
+[![VS Code](https://img.shields.io/badge/VS_Code-extension-007ACC?style=for-the-badge&logo=visualstudiocode&logoColor=white)](https://github.com/codesteward/codesteward-audit-proxy-plugins)
+[![JetBrains](https://img.shields.io/badge/JetBrains-plugin-FF6B00?style=for-the-badge&logo=jetbrains&logoColor=white)](https://github.com/codesteward/codesteward-audit-proxy-plugins)
 
-> **Repository:** [github.com/bitkaio/codesteward-audit-proxy-plugins](https://github.com/bitkaio/codesteward-audit-proxy-plugins)
+> **Repository:** [github.com/codesteward/codesteward-audit-proxy-plugins](https://github.com/codesteward/codesteward-audit-proxy-plugins)
 
 ---
 
@@ -261,7 +261,7 @@ Useful for IDE plugin connectivity checks, load balancer probes, and deployment 
 
 ## IDE plugin headers
 
-When the proxy is hosted centrally (shared by a team), individual developers cannot set env vars on the proxy process. Instead, the [IDE companion plugins](https://github.com/bitkaio/codesteward-audit-proxy-plugins) (VSCode, JetBrains) inject per-request identity via `X-Audit-*` headers.
+When the proxy is hosted centrally (shared by a team), individual developers cannot set env vars on the proxy process. Instead, the [IDE companion plugins](https://github.com/codesteward/codesteward-audit-proxy-plugins) (VSCode, JetBrains) inject per-request identity via `X-Audit-*` headers.
 
 | Header | Description | Override behaviour |
 | --- | --- | --- |

@@ -13,7 +13,7 @@
 
 services:
   proxy:
-    image: ghcr.io/bitkaio/codesteward-audit-proxy:latest
+    image: ghcr.io/codesteward/codesteward-audit-proxy:latest
     restart: unless-stopped
     ports:
       - "127.0.0.1:8080:8080"
